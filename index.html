@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>서울 야경 3D — Nightscape Pilot</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#0a0c12;overflow:hidden}
+  #app{width:100%;height:100%}
+  #hud{position:fixed;left:14px;top:12px;color:#cfd8ea;font:12px/1.5 'Segoe UI',monospace;
+       text-shadow:0 1px 3px #000;user-select:none;pointer-events:none}
+  #hud b{font-size:14px;letter-spacing:2px}
+  #fps{position:fixed;right:14px;top:50px;color:#8fa;font:11px monospace;text-shadow:0 1px 3px #000}
+  #load{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+        color:#cfd8ea;font:14px 'Segoe UI';background:#0a0c12;z-index:9}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="hud"><b>SEOUL NIGHTSCAPE</b><br>서울 전역 · 실거래 데이터 기반<br>드래그 이동 · 휠 줌 · 우클릭 회전</div>
+<div id="modeBar" style="position:fixed;left:14px;bottom:16px;z-index:5;display:flex;gap:6px">
+  <button class="mbtn" data-m="0">☀️ 낮</button>
+  <button class="mbtn" data-m="1">🌆 블루아워</button>
+  <button class="mbtn" data-m="2">🌃 야경</button>
+  <button class="mbtn" data-m="3">💰 가격</button>
+  <button class="mbtn" data-m="4">🔑 전세</button>
+</div>
+<div id="spotBar" style="position:fixed;right:14px;top:12px;z-index:5;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:340px">
+  <button class="sbtn" data-s="시청">시청</button><button class="sbtn" data-s="여의도">여의도</button>
+  <button class="sbtn" data-s="강남">강남</button><button class="sbtn" data-s="잠실">잠실</button>
+  <button class="sbtn" data-s="남산">남산</button>
+</div>
+<div id="card" style="position:fixed;left:0;top:0;z-index:6;display:none;min-width:200px;
+  background:#131826ee;border:1px solid #ffd88a55;border-radius:10px;padding:10px 14px;
+  color:#e8edf7;font:13px/1.6 'Segoe UI';pointer-events:none"></div>
+<style>.sbtn{padding:6px 11px;background:#131826bb;color:#9fb3d8;border:1px solid #9fb3d833;
+  border-radius:7px;font:12px 'Segoe UI';cursor:pointer}</style>
+<style>.mbtn{padding:8px 12px;background:#1a2030cc;color:#cfd8ea;border:1px solid #cfd8ea33;
+  border-radius:8px;font:13px 'Segoe UI';cursor:pointer}
+  .mbtn.on{color:#ffd88a;border-color:#ffd88a88;background:#2a3040cc}</style>
+<button id="capBtn" style="display:none">📸</button><!-- P키로 GPT용 4컷 캡처 -->
+<div id="yearbar" style="position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:5;
+  display:none;align-items:center;gap:12px;background:#131826dd;border:1px solid #ffd88a44;
+  border-radius:12px;padding:10px 18px">
+  <span id="ylabel" style="color:#ffd88a;font:700 26px 'Segoe UI';min-width:64px;text-shadow:0 1px 4px #000">2026</span>
+  <input id="yslider" type="range" min="2016" max="2026" step="0.25" value="2026" style="width:min(300px,38vw)">
+  <button id="yplay" style="padding:6px 12px;background:#2a3040;color:#ffd88a;border:1px solid #ffd88a66;
+    border-radius:8px;font:14px 'Segoe UI';cursor:pointer">▶ 10년</button>
+</div>
+
+
+<div id="fps"></div>
+<div id="load">서울을 짓는 중…</div>
+
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
+import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
+import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+const NAME='yeouido4';
+console.log('[ver] balance3-check');
+const Q=new URLSearchParams(location.search);
+const LITE=Q.has('lite'), NOBLOOM=Q.has('nobloom');
+// 데이터 호스트 분리 배포용 (Vercel=html, GitHub Pages=대용량 bin): window.DATA_ROOT 주입 or ?data=
+const DATA=(Q.get('data')||window.DATA_ROOT||'data').replace(/\/+$/,'');
+// 저사양 자동 감지: 코어 적거나 ?q=low → 처음부터 경량 (블룸·그레이드·MSAA 없이)
+const LOWQ=Q.get('q')==='low'||(navigator.hardwareConcurrency||8)<=4||(navigator.deviceMemory||8)<=4;
+if(LOWQ)console.log('[quality] low-spec start');
+const renderer=new THREE.WebGLRenderer({antialias:!LITE});
+try{
+  const gl=renderer.getContext();
+  const dbg=gl.getExtension('WEBGL_debug_renderer_info');
+  console.log('[gpu]',dbg?gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL):'unknown');
+}catch(e){}
+renderer.setPixelRatio(LOWQ?0.7:1.0);  // 저사양: 렌더 해상도 축소 (MSAA 유지 보상)
+renderer.setSize(innerWidth,innerHeight);
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=0.8;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,2,60000);
+camera.position.set(4800,8500,9500);   // 서울 전역 조감으로 시작 (three: y=up, 데이터 (x,y,z)→(x,z,-y))
+const controls=new OrbitControls(camera,renderer.domElement);
+controls.target.set(4800,0,-4500);   // 시청 일대
+controls.enableDamping=true; controls.dampingFactor=0.08;
+// 지도식 조작 (시즌1 방식): 드래그=이동, 우클릭=회전, 휠=줌
+controls.mouseButtons={LEFT:THREE.MOUSE.PAN,MIDDLE:THREE.MOUSE.DOLLY,RIGHT:THREE.MOUSE.ROTATE};
+controls.touches={ONE:THREE.TOUCH.PAN,TWO:THREE.TOUCH.DOLLY_ROTATE};
+controls.screenSpacePanning=false;   // 팬은 지면을 따라
+controls.maxPolarAngle=Math.PI*0.495;
+controls.minDistance=20; controls.maxDistance=32000;
+controls.zoomSpeed=1.4;
+window._cam=camera; window._controls=controls;
+// 비교용 고정 카메라: ?cam=1(전경) 2(중거리) 3(근접)
+const CAMS={1:[[80,1200,2600],[0,60,-300]],2:[[-350,190,1450],[248,110,146]],3:[[-350,120,-450],[-80,40,-750]]};
+const camPre=CAMS[Q.get('cam')];
+if(camPre){camera.position.set(...camPre[0]); controls.target.set(...camPre[1]); controls.update();}
+
+// ---------- 하늘: 블루아워 그라데이션 돔 (태양 방위 90° 웜 글로우) ----------
+const skyMat=new THREE.ShaderMaterial({
+  side:THREE.BackSide, depthWrite:false,
+  uniforms:{sunDir:{value:new THREE.Vector3(Math.sin(Math.PI/2),0.03,-Math.cos(Math.PI/2)).normalize()},
+            uMode:{value:0}},
+  vertexShader:`varying vec3 vDir; void main(){vDir=normalize(position);
+    gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+  fragmentShader:`
+    varying vec3 vDir; uniform vec3 sunDir; uniform float uMode;
+    void main(){
+      float h=clamp(vDir.y,0.0,1.0);
+      float sunD=max(dot(normalize(vDir),normalize(sunDir)),0.0);
+      // 모드 가중치 (0=낮 1=블루아워 2=야경 3=가격)
+      float wDay=1.0-smoothstep(0.0,1.0,uMode);
+      float wBlue=1.0-min(abs(uMode-1.0),1.0);
+      float wNight=1.0-min(abs(uMode-2.0),1.0);
+      float wPrice=step(2.5,uMode);
+      // 낮: 맑은 하늘
+      vec3 dayS=mix(vec3(0.72,0.80,0.90),vec3(0.30,0.50,0.82),smoothstep(0.0,0.5,h));
+      dayS+=vec3(1.0)*pow(sunD,32.0)*0.4;
+      // 블루아워: 노을
+      vec3 blueS=mix(vec3(0.95,0.72,0.50),mix(vec3(0.45,0.42,0.50),vec3(0.10,0.12,0.20),smoothstep(0.12,0.6,h)),smoothstep(0.0,0.12,h));
+      blueS+=vec3(1.0,0.55,0.25)*pow(sunD,8.0)*0.55;
+      blueS+=vec3(1.0,0.8,0.55)*smoothstep(0.9995,0.9999,sunD)*4.0;
+      // 야경: 심야 남색 + 지평선 도시광 + 별
+      vec3 nightS=mix(vec3(0.10,0.085,0.09),mix(vec3(0.035,0.045,0.09),vec3(0.015,0.02,0.05),smoothstep(0.15,0.6,h)),smoothstep(0.0,0.1,h));
+      vec2 sp=vDir.xz/max(vDir.y,0.05)*180.0;
+      float star=step(0.9965,fract(sin(dot(floor(sp),vec2(127.1,311.7)))*43758.5453))*smoothstep(0.12,0.4,h);
+      nightS+=vec3(0.55,0.6,0.7)*star*0.5;
+      // 가격: 야경과 동일한 무대
+      vec3 sky=dayS*wDay+blueS*wBlue+nightS*(wNight+wPrice);
+      gl_FragColor=vec4(sky,1.0);
+    }`
+});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(40000,32,16),skyMat));
+scene.fog=new THREE.Fog(0x957c6d,9000,60000);   // 원경 대기 — 색은 setMode에서 셰이더 헤이즈와 동일하게 통일
+
+// ---------- 건물 유형 파라미터 (build_scene.py TYPE_MATS와 동일) ----------
+// [ART_DIRECTION 4순위] 색 체계 통일: 바디=네이비그레이 단일 계열(명도만 미세 편차),
+// 창문=따뜻한 흰색·연노랑 중심(WARM/PALE), 쿨톤은 오피스·랜드마크에 소량만, 강조색 없음
+const WALL_A=[0.020,0.023,0.031], WALL_B=[0.030,0.032,0.038];         // 공통 바디
+const WALL_DK=[0.015,0.017,0.024], WALL_DK2=[0.023,0.025,0.031];      // 저층·구축용 약간 어둡게
+const GLASS_A=[0.010,0.013,0.020], GLASS_B=[0.015,0.018,0.025];       // 커튼월
+const WARM=[1.0,0.83,0.58];    // 연노랑
+const PALE=[1.0,0.92,0.78];    // 따뜻한 흰색
+const COOLW=[0.88,0.92,1.0];   // 아주 옅은 쿨 (오피스 전용)
+const TYPE_PARAMS={
+  landmark:{cell:[5,5,3.4],zb:[0.1,0.9],xyb:[0.08,0.92],thr:[0.20,0.46],cool:0.5,emit:[3.2,0.5],
+            wallA:GLASS_A,wallB:GLASS_B,warm:WARM,coolC:PALE},
+  office:{cell:[11,11,3.1],zb:[0.2,0.85],xyb:[0.08,0.92],thr:[0.13,0.36],cool:0.55,emit:[2.2,0.4],
+          wallA:GLASS_A,wallB:GLASS_B,warm:PALE,coolC:COOLW},
+  apt_new:{cell:[3.6,3.6,2.9],zb:[0.3,0.8],xyb:[0.2,0.8],thr:[0.15,0.38],cool:0.85,emit:[3.4,0.4],
+           wallA:WALL_A,wallB:WALL_B,warm:WARM,coolC:PALE,unit:3,roofG:0.12},
+  apt_old:{cell:[3.2,3.2,2.8],zb:[0.32,0.78],xyb:[0.2,0.8],thr:[0.10,0.28],cool:0.9,emit:[3.0,0.35],
+           wallA:WALL_DK,wallB:WALL_DK2,warm:WARM,coolC:PALE,unit:3,roofG:0.45},
+  villa:{cell:[3,3,2.7],zb:[0.3,0.75],xyb:[0.2,0.8],thr:[0.08,0.22],cool:0.92,emit:[2.7,0.35],
+         wallA:WALL_DK,wallB:WALL_DK2,warm:WARM,coolC:PALE,nearBoost:1.8,unit:2,roofG:0.55},
+  retail:{cell:[4.5,4.5,3.3],zb:[0.2,0.85],xyb:[0.12,0.88],thr:[0.20,0.48],cool:0.75,emit:[3.2,0.55],
+          wallA:WALL_DK,wallB:WALL_B,warm:WARM,coolC:PALE,shop:1,nearBoost:1.6,roofG:0.28},
+  misc:{cell:[4,4,3],zb:[0.3,0.75],xyb:[0.2,0.8],thr:[0.08,0.32],cool:0.85,emit:[3.4,0.4],
+        wallA:WALL_A,wallB:WALL_B,warm:WARM,coolC:PALE,unit:2,roofG:0.35},
+};
+
+// 연도별 가격 텍스처 (pid × 연도 → 백분위) — 로드 전 더미
+const PY_DUMMY=new THREE.DataTexture(new Uint8Array([0]),1,1,THREE.RedFormat,THREE.UnsignedByteType);
+PY_DUMMY.needsUpdate=true;
+
+// 창문 셰이더 — Blender 노드 로직의 GLSL 번역 (월드좌표 프로시저럴)
+function buildingMaterial(p){
+  return new THREE.ShaderMaterial({
+    uniforms:{
+      uCell:{value:new THREE.Vector3(...p.cell)},
+      uZB:{value:new THREE.Vector2(...p.zb)}, uXYB:{value:new THREE.Vector2(...p.xyb)},
+      uThr:{value:new THREE.Vector2(...p.thr)}, uCool:{value:p.cool},
+      uEmit:{value:new THREE.Vector2(...p.emit)},
+      uWallA:{value:new THREE.Color(...p.wallA)}, uWallB:{value:new THREE.Color(...p.wallB)},
+      uWarm:{value:new THREE.Color(...p.warm)}, uCoolC:{value:new THREE.Color(...p.coolC)},
+      uSky:{value:new THREE.Color(0.35,0.33,0.40)},
+      uMode:{value:0},
+      uSunXY:{value:new THREE.Vector2(1,0)},   // 원좌표계 xy 태양 방위
+      uShop:{value:p.shop?1:0},                // 상가 1층 쇼윈도
+      uNearBoost:{value:p.nearBoost||1.0},     // 저층 근접 존재감
+      uUnit:{value:p.unit||1.0},               // 가구 단위(창 N개 묶음 점등)
+      uRoofG:{value:p.roofG||0.0},             // 한국 저층 옥상: 초록 우레탄 방수 비율
+      uPY:{value:PY_DUMMY},                    // 연도별 가격 백분위 텍스처 (aPrice=단지 pid)
+      uYear:{value:10.0},                      // 0=2016 … 10=2026
+      uPYRows:{value:7.0},uPYH:{value:77.0},
+    },
+    vertexShader:`
+      attribute float aPrice;
+      attribute float aRent;
+      varying vec3 vW;   // 원좌표계(x,y=북,z=높이)
+      varying float vPrice;
+      varying float vRent;
+      varying float vDist;
+      void main(){
+        vW=vec3(position.x,-position.z,position.y);
+        vPrice=aPrice;
+        vRent=aRent;
+        vec4 mv=modelViewMatrix*vec4(position,1.0);
+        vDist=length(mv.xyz);
+        gl_Position=projectionMatrix*mv;
+      }`,
+    fragmentShader:`
+      varying vec3 vW;
+      varying float vPrice;
+      varying float vRent;
+      vec3 rentColor(float r){
+        // 전세가율: 40%↓=민트(갭 큼) → 60%=웜화이트 → 75%↑=핫레드(갭투자 지대)
+        float t=clamp((r-0.38)/0.40,0.0,1.0);
+        vec3 lo=vec3(0.35,1.0,0.75), mi=vec3(1.0,0.85,0.6), hi=vec3(1.0,0.20,0.08);
+        return t<0.5?mix(lo,mi,t*2.0):mix(mi,hi,(t-0.5)*2.0);
+      }
+      varying float vDist;
+      uniform vec3 uCell; uniform vec2 uZB,uXYB,uThr,uEmit;
+      uniform float uCool,uMode,uShop,uNearBoost,uUnit,uRoofG; uniform vec3 uWallA,uWallB,uWarm,uCoolC,uSky;
+      uniform vec2 uSunXY;
+      uniform sampler2D uPY; uniform float uYear,uPYRows,uPYH;
+      // (pid, 연도인덱스) → 가격 백분위 (-1=결측). 텍스처: x=pid%4096, y=연도*rows+pid/4096
+      float pyAt(float pid,float yi){
+        float col=mod(pid,4096.0), row=floor(pid/4096.0);
+        float v=texture2D(uPY,vec2((col+0.5)/4096.0,((yi*uPYRows+row)+0.5)/uPYH)).r*255.0;
+        return v<0.5?-1.0:(v-1.0)/254.0;
+      }
+      float pyPct(float pid){
+        if(pid<-0.5)return -1.0;
+        float y0=floor(uYear), yf=uYear-y0, y1=min(10.0,y0+1.0);
+        float a=pyAt(pid,y0), b=pyAt(pid,y1);
+        if(a<0.0)return b; if(b<0.0)return a; return mix(a,b,yf);
+      }
+      vec3 priceColor(float t){
+        // 0 저렴=민트 → 0.5 웜화이트 → 1 최고가=골드오렌지
+        vec3 lo=vec3(0.35,1.0,0.75), mi=vec3(1.0,0.85,0.6), hi=vec3(1.0,0.45,0.08);
+        return t<0.5?mix(lo,mi,t*2.0):mix(mi,hi,(t-0.5)*2.0);
+      }
+      float wn(vec3 p){return fract(sin(dot(p,vec3(12.9898,78.233,37.719)))*43758.5453);}
+      float noise2(vec2 p){  // coarse 대체용 밸류노이즈
+        vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);
+        float a=wn(vec3(i,0.)),b=wn(vec3(i+vec2(1,0),0.)),c=wn(vec3(i+vec2(0,1),0.)),d=wn(vec3(i+vec2(1,1),0.));
+        return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);
+      }
+      void main(){
+        vec3 n=normalize(cross(dFdx(vW),dFdy(vW)));   // 플랫 노멀
+        float wall=step(abs(n.z),0.5);
+        vec3 sc=vW/uCell;
+        vec3 cell=floor(sc), fr=fract(sc);
+        // 건물별 점등률 편차
+        float coarse=noise2(vW.xy*0.004*4.0);
+        float thr=mix(uThr.x,uThr.y,coarse);
+        thr*=1.0+smoothstep(2500.0,9000.0,vDist)*1.6;   // 원거리=점등 밀도로 글로우 (반짝이 대신)
+        // 가구 단위 점등: 인접 창 uUnit개가 같은 세대처럼 함께 켜짐 (구조가 읽히는 불빛)
+        vec3 ucell=vec3(floor(cell.x/uUnit),floor(cell.y/uUnit),cell.z);
+        float lit=step(wn(ucell),thr);
+        // 아파트 계단실: 8칸마다 한 줄 상시 점등 (수직 리듬 = 건물 구조가 읽히는 불빛)
+        if(uUnit>2.5){
+          float stairCol=step(0.94,fract((cell.x+cell.y)*0.125+wn(vec3(floor(vW.xy/60.0),7.0))*0.5));
+          lit=max(lit,stairCol*0.8);
+        }
+        // 창 밴드
+        float bz=step(uZB.x,fr.z)*step(fr.z,uZB.y);
+        float bx=step(uXYB.x,fr.x)*step(fr.x,uXYB.y);
+        float by=step(uXYB.x,fr.y)*step(fr.y,uXYB.y);
+        float win=bz*max(bx,by)*wall*lit;
+        // 색·밝기
+        // 창문 색 스펙트럼: 흑백 금지 — 실제 도시의 색온도 분포 (딥오렌지~쿨화이트)
+        float ct=wn(ucell+vec3(13.7,7.3,3.1));
+        vec3 winCol;
+        if(ct<0.14)winCol=vec3(1.0,0.42,0.10);        // 딥 오렌지 (나트륨등 감성)
+        else if(ct<0.45)winCol=vec3(1.0,0.62,0.28);   // 앰버
+        else if(ct<0.80)winCol=uWarm;                  // 유형별 웜
+        else if(ct<0.95)winCol=vec3(0.95,0.94,0.90);  // 뉴트럴 화이트
+        else winCol=uCoolC;                            // 쿨 (오피스 계열)
+        float s=wn(ucell+vec3(91.1,42.9,17.3)); s=s*s*uEmit.x+uEmit.y;
+        s*=1.0+smoothstep(2500.0,9000.0,vDist)*0.4;
+        s=min(s,3.2);                                  // 순백 점 방지 상한
+        // 모드 가중치 (0=낮 1=블루아워 2=야경 3=가격)
+        float wDay=1.0-smoothstep(0.0,1.0,uMode);
+        float wBlue=1.0-min(abs(uMode-1.0),1.0);
+        float wNight=1.0-min(abs(uMode-2.0),1.0);
+        float wPrice=step(2.5,uMode);
+        // [5순위] 상가 1층 쇼윈도 (블루아워·야경만)
+        if(uShop>0.5 && uMode>0.5 && uMode<2.5 && vW.z<4.2 && vW.z>0.4){
+          float shopWin=bz*max(bx,by)*wall;
+          if(shopWin>0.0 && wn(cell+vec3(5.5,2.2,9.9))<0.75){
+            win=max(win,shopWin);
+            s=max(s,2.2);
+            winCol=mix(winCol,vec3(1.0,0.82,0.52),0.6);
+            // 간판 컬러 악센트: 상가 불빛의 1/4은 채도 있는 색 (도시의 색기)
+            float sg=wn(cell+vec3(3.3,9.1,5.7));
+            if(sg>0.75){
+              winCol=sg>0.94?vec3(1.0,0.22,0.18):(sg>0.87?vec3(0.3,0.95,0.55):(sg>0.81?vec3(0.35,0.65,1.0):vec3(1.0,0.72,0.15)));
+              s=max(s,2.6);
+            }
+          }
+        }
+        // 시간대별 창문 광량 (낮=거의 꺼짐, 블루아워=일부, 야경=풀)
+        s*=mix(1.0,0.05,wDay);
+        s*=1.0-wBlue*0.4;
+        // 낮: 꺼진 창 = 하늘 비친 유리 (winCol*s가 검은 점으로 찍혀 도시가 흙먼지처럼 보이던 것 수정)
+        winCol=mix(winCol,vec3(0.33,0.38,0.47),wDay);
+        s=max(s,1.05*wDay);
+        float pPct=uMode>2.5&&uMode<3.5?pyPct(vPrice):-1.0;   // 가격모드: (pid,연도)→백분위
+        if(uMode>2.5){
+          // 데이터 모드: 창문 점광 억제 (반짝임 제거 — 색은 건물 몸체가 담당)
+          float dOK=uMode>3.5?step(0.0,vRent):step(0.0,pPct);
+          vec3 dC=uMode>3.5?rentColor(vRent):priceColor(pPct);
+          if(dOK>0.5){winCol=dC; s=min(s,0.9);}
+          else{winCol=vec3(0.55,0.60,0.72); s=min(s,0.5);}
+        }
+        // 벽: 하늘 반구광 + 노을 림라이트 (불 꺼진 표면도 형태가 보이게)
+        vec3 wallCol=mix(uWallA,uWallB,coarse);
+        float hemi=clamp(n.z*0.35+0.75,0.0,1.1);
+        float rim=pow(max(dot(normalize(n.xy+vec2(1e-5)),normalize(uSunXY)),0.0),2.0)*wall;
+        // 시간대별 환경광: 낮=밝은 재질, 블루아워=웜 림, 야경=어두운 실루엣
+        vec3 ambDay=mix(vec3(1.50,1.36,1.10),vec3(1.62,1.40,1.02),rim*0.5);   // 웜 보정 강화 (네이비 벽색×광 = 청회 홍수 방지)
+        vec3 ambBlue=mix(vec3(0.20,0.23,0.33),vec3(1.0,0.62,0.38),rim*0.65);
+        vec3 ambNight=mix(vec3(0.10,0.12,0.20),vec3(0.32,0.24,0.18),rim*0.3);
+        vec3 ambM=ambDay*wDay+ambBlue*wBlue+ambNight*(wNight+wPrice);
+        float nearF=1.0-smoothstep(700.0,6500.0,vDist);
+        float ambK=mix(2.5+4.5*nearF*uNearBoost,9.0,wDay);
+        vec3 base=wallCol*ambM*ambK*hemi;
+        if(wall<0.5){
+          // 지붕 디테일: 얼룩(옥탑·HVAC·방수 마감 편차) + 한국 저층 = 초록 우레탄/갈색 슁글
+          base*=mix(0.28,0.85,wDay);                 // 밤엔 어둡게, 낮엔 보이게
+          float rn=wn(vec3(floor(vW.xy/16.0),3.7));
+          float rn2=wn(vec3(floor(vW.xy/5.0),9.1));
+          base*=mix(0.82,1.14,rn)*mix(0.92,1.06,rn2);
+          if(uRoofG>0.01){
+            // 지붕색 추첨: 60m 셀 + 건물 높이(지붕은 vW.z 동일) → 한 지붕은 통째 한 색 (조각보 방지)
+            float gpick=wn(vec3(floor(vW.xy/60.0),vW.z*7.3));
+            if(gpick<uRoofG) base*=vec3(0.62,1.30,0.72);         // 초록 방수페인트
+            else if(gpick<uRoofG+0.18) base*=vec3(1.22,0.98,0.74); // 갈색 아스팔트 슁글
+          }
+        }else{
+          // 낮: 층간 스팬드럴 밴드 — 창문 행 사이가 살짝 어두워져 층이 읽힘
+          base*=1.0-(1.0-bz)*0.16*wDay;
+        }
+        base*=mix(0.45,1.0,smoothstep(0.0,2.6,vW.z));  // 기초부 접지 음영: 건물이 바닥에 서 있게
+        // [원거리 도시 덩어리] 실루엣 소실 방지: 멀어질수록 벽·지붕을 대기 반사 톤으로 리프트
+        // → 창문 점만 남는 평면화 대신 도시 조직이 지면보다 밝은 입체 덩어리로 읽힘
+        float farF=smoothstep(3000.0,9000.0,vDist);
+        vec3 massBlue=mix(vec3(0.085,0.072,0.062),vec3(0.30,0.185,0.11),rim); // 석양 받은 덩어리
+        vec3 massDay=vec3(0.30,0.295,0.29);
+        vec3 massNight=vec3(0.030,0.034,0.050);
+        vec3 mass=massDay*wDay+massBlue*wBlue+massNight*(wNight+wPrice);
+        base=mix(base,mass,farF*0.85);
+        // 가격 모드: 아파트=가격색 발광, 나머지=달빛 은회색 실루엣
+        if(uMode>2.5){
+          // [리버 지시] 초기버전 방식 복원: 건물 통짜 컬러 = 단지 단위 임팩트
+          float dOK2=uMode>3.5?step(0.0,vRent):step(0.0,pPct);
+          float dT2=uMode>3.5?clamp((vRent-0.38)/0.40,0.0,1.0):max(pPct,0.0);
+          vec3 dC2=uMode>3.5?rentColor(vRent):priceColor(pPct);
+          if(dOK2>0.5){
+            base=dC2*(0.30+dT2*0.45);                      // 벽 전체가 데이터색 (읽힘 우선)
+            if(wall<0.5) base=dC2*(0.75+dT2*1.1);          // 지붕은 더 밝게
+          }
+          else base=vec3(dot(base,vec3(0.33)))*vec3(0.7,0.78,0.95)*0.8;
+        }
+        vec3 col=mix(base,winCol*s,win);
+        // 원거리 대기 페이드: 하늘 지평선과 연결된 웜 헤이즈 (모든 레이어 공통 색 — 회색 수렴 금지)
+        vec3 fogCol=vec3(0.55,0.58,0.63)*wDay+vec3(0.30,0.20,0.15)*wBlue+vec3(0.015,0.022,0.045)*(wNight+wPrice);
+        col=mix(col,fogCol,smoothstep(7000.0,26000.0,vDist)*0.24);
+        gl_FragColor=vec4(col,1.0);
+      }`
+  });
+}
+
+function emitMat(r,g,b,s){return new THREE.MeshBasicMaterial({color:new THREE.Color(r*s,g*s,b*s)});}
+
+// 도로 재질: 원거리=발광 혈관(기존 룩), 근거리=아스팔트 노면+가로등 빛 웅덩이 (주황 통짜 리본 방지)
+function roadMaterial(){
+  return new THREE.ShaderMaterial({
+    uniforms:{uColor:{value:new THREE.Color(1,0.7,0.4)},uMode:{value:1}},
+    vertexShader:`varying vec3 vW; varying float vDist;
+      void main(){vW=position; vec4 mv=modelViewMatrix*vec4(position,1.0); vDist=length(mv.xyz);
+      gl_Position=projectionMatrix*mv;}`,
+    fragmentShader:`
+      varying vec3 vW; varying float vDist; uniform vec3 uColor; uniform float uMode;
+      float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+      float vn(vec2 p){vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);
+        return mix(mix(h(i),h(i+vec2(1,0)),f.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x),f.y);}
+      void main(){
+        float wDay=1.0-smoothstep(0.0,1.0,uMode);
+        float nearF=1.0-smoothstep(450.0,2200.0,vDist);
+        // 근접: 아스팔트 결 + ~18m 주기 가로등 빛 웅덩이
+        float pool=smoothstep(0.35,0.9,vn(vW.xz*0.055));
+        float grain=vn(vW.xz*0.5)*0.25+0.875;
+        vec3 asph=mix(vec3(0.020,0.020,0.024),vec3(0.115,0.115,0.125),wDay)*grain;
+        vec3 nearC=asph+uColor*pool*(1.0-wDay*0.85)*0.9;
+        vec3 col=mix(uColor,nearC,nearF);
+        // 원거리 대기 (기본재질 scene.fog 대체 — 헤이즈 팔레트 통일)
+        float wNP=min(smoothstep(1.5,2.0,uMode)+step(2.5,uMode),1.0);
+        float wBlue=clamp(1.0-wDay-wNP,0.0,1.0);
+        vec3 fogCol=vec3(0.55,0.58,0.63)*wDay+vec3(0.30,0.20,0.15)*wBlue+vec3(0.015,0.022,0.045)*wNP;
+        col=mix(col,fogCol,smoothstep(7000.0,26000.0,vDist)*0.30);
+        gl_FragColor=vec4(col,1.0);
+      }`
+  });
+}
+
+// ---------- 데이터 로드 ----------
+async function load(){
+  const meta=await (await fetch(DATA+'/seoul/seoul_meta.json')).json();
+  const buf=await (await fetch(DATA+'/seoul/resident.bin')).arrayBuffer();
+  const mkGeo=(bf,L)=>{
+    // (x, y북, z높이) → three (x, z높이, -y). q 있으면 uint16 정규화 복원
+    const pos=new Float32Array(L.vn*3);
+    if(L.q){
+      const a=new Uint16Array(bf,L.vo,L.vn*3);
+      const [mx,my,mz,ex,ey,ez]=L.q, S=1/65535;
+      for(let i=0;i<L.vn;i++){
+        pos[i*3]  =mx+a[i*3]*S*ex;
+        pos[i*3+1]=mz+a[i*3+2]*S*ez;
+        pos[i*3+2]=-(my+a[i*3+1]*S*ey);
+      }
+    }else{
+      const arr=new Float32Array(bf,L.vo,L.vn*3);
+      for(let i=0;i<L.vn;i++){pos[i*3]=arr[i*3];pos[i*3+1]=arr[i*3+2];pos[i*3+2]=-arr[i*3+1];}
+    }
+    const g=new THREE.BufferGeometry();
+    g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+    if(L.io>=0){
+      g.setIndex(new THREE.BufferAttribute(L.i2?new Uint16Array(bf,L.io,L.in):new Uint32Array(bf,L.io,L.in),1));
+    }
+    if(L.po!==undefined){
+      let f;
+      if(L.pq){const u=new Uint16Array(bf,L.po,L.vn); f=new Float32Array(L.vn);
+        for(let i=0;i<L.vn;i++)f[i]=u[i]===65535?-1:u[i];}
+      else f=new Float32Array(bf,L.po,L.vn);
+      g.setAttribute('aPrice',new THREE.BufferAttribute(f,1));
+    }
+    if(L.ro!==undefined){
+      let f;
+      if(L.rq){const u=new Uint8Array(bf,L.ro,L.vn); f=new Float32Array(L.vn);
+        for(let i=0;i<L.vn;i++)f[i]=u[i]===255?-1:u[i]/200;}
+      else f=new Float32Array(bf,L.ro,L.vn);
+      g.setAttribute('aRent',new THREE.BufferAttribute(f,1));
+    }
+    g.computeBoundingSphere();
+    return g;
+  };
+  // 유형별 머티리얼 1개 공유
+  const typeMat={};
+  for(const t of Object.keys(TYPE_PARAMS))typeMat[t]=buildingMaterial(TYPE_PARAMS[t]);
+  // 연도별 가격 텍스처 로드 → 전 건물 머티리얼에 주입
+  fetch(DATA+'/seoul/price_years.bin').then(r=>r.arrayBuffer()).then(b=>{
+    const t=new THREE.DataTexture(new Uint8Array(b),meta.py_w,meta.py_h,THREE.RedFormat,THREE.UnsignedByteType);
+    t.minFilter=t.magFilter=THREE.NearestFilter; t.needsUpdate=true;
+    for(const k in typeMat){
+      typeMat[k].uniforms.uPY.value=t;
+      typeMat[k].uniforms.uPYRows.value=meta.py_rows;
+      typeMat[k].uniforms.uPYH.value=meta.py_h;
+    }
+    console.log('[price] year texture',meta.py_w+'x'+meta.py_h);
+  }).catch(e=>console.warn('price_years.bin 없음(재패킹 전?)',e));
+  // 연도 슬라이더 (가격 모드 전용)
+  const yslider=document.getElementById('yslider'), ylabel=document.getElementById('ylabel');
+  function setYear(v){
+    v=Math.max(2016,Math.min(2026,+v));
+    for(const k in typeMat)typeMat[k].uniforms.uYear.value=v-2016;
+    ylabel.textContent=Math.round(v);
+  }
+  yslider.oninput=()=>setYear(yslider.value);
+  let yAnim=null;
+  document.getElementById('yplay').onclick=()=>{
+    if(yAnim){cancelAnimationFrame(yAnim);yAnim=null;return;}
+    const t0=performance.now();
+    const step=()=>{
+      const y=2016+Math.min(10,(performance.now()-t0)/800);   // 0.8초/년 = 8초 여정
+      yslider.value=y; setYear(y);
+      yAnim=y<2026?requestAnimationFrame(step):null;
+    };
+    step();
+  };
+  // [ART_DIRECTION 3순위] 도로: 간선만 존재감, 이면은 은은한 간접광 수준
+  const stMat=[roadMaterial(),roadMaterial(),roadMaterial()];
+  const deckMat=new THREE.MeshBasicMaterial({color:0x0a0b0e});
+  const brMat=emitMat(1,0.78,0.5,1.6);
+  const greenMat=new THREE.MeshBasicMaterial({color:0x101e12});
+  // 랜드유즈 구획 재질 (주차장·학교·운동장·잔디·묘지·철도부지·선로) — 색은 setMode에서 모드별 주입
+  const luMat={};
+  for(const k of ['parking','school','pitch','grass','cem','rail','raill'])
+    luMat[k]=new THREE.MeshBasicMaterial({color:0x000000});
+  // 저층 카펫: 빌라 셰이더 재사용 (원거리 점등밀도 부스트로 은은히 빛남 — 카키 진흙 블록 금지)
+  const aggMat=typeMat.villa;
+  const aggMeshes={};          // 원거리 저층 집계 블록 (타일 로드시 숨김)
+  let waterL=null;
+  const addLayer=(key,L,bf,bucket)=>{
+    if(key.startsWith('agg_')){
+      // 원거리 저층 카펫: 은은한 도시광 덩어리 (창문은 이 거리에서 안 보임)
+      const m=new THREE.Mesh(mkGeo(bf,L),aggMat);
+      scene.add(m); aggMeshes[key.slice(4)]=m; return;
+    }
+    let mat=null;
+    if(key.startsWith('bldg_'))mat=typeMat[key.slice(5).split('#')[0]];   // 분할 청크(bldg_villa#2) 지원
+    else if(key==='street0')mat=stMat[0];
+    else if(key==='street1')mat=stMat[1];
+    else if(key==='street2')mat=stMat[2];
+    else if(key==='deck')mat=deckMat;
+    else if(key==='green')mat=greenMat;
+    else if(key.startsWith('lu_'))mat=luMat[key.slice(3)];
+    else if(key==='raill')mat=luMat.raill;
+    else if(key==='water'){waterL=[bf,L]; return;}   // 물은 전용 셰이더 준비 후
+    else if(key==='brlight'){
+      mat=brMat;
+      // 수면 반사 페이크: 다리 조명을 수면 높이에 흐릿하게 복제
+      const rg=mkGeo(bf,L);
+      const rp=rg.attributes.position;
+      for(let i=0;i<rp.count;i++)rp.setY(i,0.36);
+      rg.computeBoundingSphere();
+      const rm=new THREE.MeshBasicMaterial({color:new THREE.Color(0.5,0.39,0.25),
+        transparent:true,opacity:0.35,depthWrite:false});
+      scene.add(new THREE.Mesh(rg,rm));
+    }
+    if(!mat)return;
+    const m=new THREE.Mesh(mkGeo(bf,L),mat);
+    scene.add(m);
+    if(bucket)bucket.push(m);
+  };
+  for(const [key,L] of Object.entries(meta.resident))addLayer(key,L,buf,null);
+  console.log('[resident]',Object.keys(meta.resident).length,'layers,',Object.keys(meta.tiles).length,'tiles available');
+
+  // ---------- 근거리 타일 스트리밍 ----------
+  const TILE=meta.tile;
+  const tileState={};
+  async function loadTile(key){
+    tileState[key]={status:'loading',meshes:[]};
+    const T=meta.tiles[key];
+    let tb;
+    try{tb=await (await fetch(DATA+'/seoul/'+T.file)).arrayBuffer();}
+    catch(e){delete tileState[key]; return;}
+    if(!tileState[key])return;
+    const meshes=[];
+    for(const [k,L] of Object.entries(T.layers))addLayer(k,L,tb,meshes);
+    tileState[key]={status:'loaded',meshes};
+    const am=aggMeshes[key]; if(am)am.visible=false;
+  }
+  function unloadTile(key){
+    for(const m of tileState[key].meshes){scene.remove(m); m.geometry.dispose();}
+    delete tileState[key];
+    const am=aggMeshes[key]; if(am)am.visible=true;
+  }
+  function updateTiles(){
+    const fx=controls.target.x, fy=-controls.target.z;
+    const camH=camera.position.y;
+    const R=camH>4500?0:(window._tileR||(LOWQ?1800:3200));   // 고공에선 디테일 타일 불필요
+    const wanted=new Set();
+    if(R>0){
+      for(let tx=Math.floor((fx-R)/TILE);tx<=Math.floor((fx+R)/TILE);tx++)
+        for(let ty=Math.floor((fy-R)/TILE);ty<=Math.floor((fy+R)/TILE);ty++){
+          const key=tx+'_'+ty;
+          if(meta.tiles[key])wanted.add(key);
+        }
+    }
+    for(const key of wanted)if(!tileState[key]){tileState[key]={status:'queued',meshes:[]};loadQueue.push(key);}
+    for(const key in tileState){
+      if(tileState[key].status==='loaded'&&!wanted.has(key))unloadTile(key);
+    }
+  }
+  // 타일 로드 스태거: 한 번에 하나씩 (일괄 로드 시 렌더 끊김 방지)
+  const loadQueue=[];
+  setInterval(()=>{
+    const k=loadQueue.shift();
+    if(k&&tileState[k]&&tileState[k].status==='queued')loadTile(k);
+  },140);
+  setInterval(updateTiles,700);
+  updateTiles();
+
+  // [ART_DIRECTION v2 1순위] 4모드: 0=낮 1=블루아워 2=야경 3=가격 — 조명 룰 완전 분리
+  let mode=1;
+  // 도로 색: 모드별 [간선, 중로, 이면]
+  // [리버 지시] 초기버전의 레이어 구분감 복원: 도로는 어느 모드에서든 도시 혈관으로 읽혀야 함
+  const ST_COLORS=[
+    [[0.115,0.115,0.13],[0.085,0.085,0.095],[0.065,0.065,0.075]],     // 낮: 어두운 아스팔트 (밝은 지면 위 도로망이 지도처럼 읽힘)
+    [[0.85,0.45,0.12],[0.42,0.24,0.09],[0.20,0.13,0.06]],             // 블루아워: 골드오렌지 채도 상향 (크림빛 탈색 방지)
+    [[0.85,0.55,0.26],[0.44,0.30,0.15],[0.20,0.145,0.08]],            // 야경: 앰버 풀
+    [[0.42,0.47,0.63],[0.27,0.31,0.43],[0.16,0.19,0.27]],             // 가격: 은청 선명
+    [[0.42,0.47,0.63],[0.27,0.31,0.43],[0.16,0.19,0.27]],             // 전세: 은청 선명
+  ];
+  const BR_COLORS=[[0.32,0.32,0.34],[1.05,0.64,0.24],[1.2,0.92,0.58],[0.62,0.70,0.92],[0.62,0.70,0.92]];
+  // 대기 색 통일: 도로·공원·다리(기본 재질)의 안개가 셰이더 헤이즈와 같은 색으로 수렴해야
+  // 원거리에서 도로가 검은 띠·공원이 검은 얼룩으로 반전되지 않음 (sRGB hex = 셰이더 linear 값과 동일)
+  const FOG_COLORS=[0xc4c8d0,0x957c6d,0x222a3c,0x222a3c,0x222a3c];
+  const GREEN_COLORS=[0x33502e,0x141f12,0x0a140c,0x0e1520,0x0e1520];  // 공원: 낮엔 보이는 녹지
+  // 랜드유즈 팔레트 (linear RGB, 모드 0낮/1블루/2야경/3가격/4전세) — 낮이 주무대, 밤엔 톤만
+  const LU_COLORS={
+    parking:[[0.155,0.155,0.165],[0.030,0.028,0.030],[0.014,0.015,0.022],[0.013,0.016,0.024],[0.013,0.016,0.024]],
+    school: [[0.300,0.235,0.140],[0.052,0.040,0.026],[0.020,0.016,0.012],[0.013,0.016,0.024],[0.013,0.016,0.024]],
+    pitch:  [[0.090,0.200,0.090],[0.022,0.036,0.018],[0.010,0.015,0.010],[0.012,0.015,0.022],[0.012,0.015,0.022]],
+    grass:  [[0.095,0.185,0.075],[0.019,0.030,0.015],[0.009,0.013,0.008],[0.011,0.014,0.020],[0.011,0.014,0.020]],
+    cem:    [[0.125,0.155,0.105],[0.022,0.026,0.019],[0.010,0.012,0.009],[0.011,0.014,0.020],[0.011,0.014,0.020]],
+    rail:   [[0.100,0.095,0.100],[0.021,0.019,0.021],[0.011,0.011,0.015],[0.012,0.015,0.023],[0.012,0.015,0.023]],
+    raill:  [[0.052,0.052,0.058],[0.034,0.028,0.024],[0.018,0.016,0.019],[0.020,0.024,0.034],[0.020,0.024,0.034]],
+  };
+  const BLOOM_STR=[0.08,0.28,0.32,0.25,0.25];
+  function setMode(m){
+    mode=m;
+    for(const t of Object.keys(typeMat))typeMat[t].uniforms.uMode.value=m;
+    skyMat.uniforms.uMode.value=m;
+    if(window._waterMat)window._waterMat.uniforms.uMode.value=m;
+    if(window._terrMat)window._terrMat.uniforms.uMode.value=m;
+    stMat.forEach((mt,i)=>{mt.uniforms.uColor.value.setRGB(...ST_COLORS[m][i]);mt.uniforms.uMode.value=m;});
+    brMat.color.setRGB(...BR_COLORS[m]);
+    greenMat.color.setHex(GREEN_COLORS[m]);
+    for(const k in luMat)luMat[k].color.setRGB(...LU_COLORS[k][m]);
+    scene.fog.color.setHex(FOG_COLORS[m]);
+    if(window._bloom)window._bloom.strength=BLOOM_STR[m];
+    if(window._grade)window._grade.uniforms.uMode.value=m;
+    document.querySelectorAll('.mbtn').forEach(b=>b.classList.toggle('on',+b.dataset.m===m));
+    document.getElementById('yearbar').style.display=m===3?'flex':'none';
+  }
+  document.querySelectorAll('.mbtn').forEach(b=>b.onclick=()=>setMode(+b.dataset.m));
+  setMode(1);
+  addEventListener('keydown',e=>{if(e.key==='p'||e.key==='P')document.getElementById('capBtn').click();});
+
+  // 명소 바로가기 (three 좌표: x, z=-북)
+  const SPOTS={'시청':[4762,-4565],'여의도':[248,146],'강남':[9150,2989],'잠실':[15540,1293],'남산':[5678,-2896]};
+  document.querySelectorAll('.sbtn').forEach(b=>b.onclick=()=>{
+    const [x,z]=SPOTS[b.dataset.s];
+    controls.target.set(x,60,z);
+    camera.position.set(x+300,650,z+1500);
+    controls.update();
+  });
+
+  // 클릭 → 단지 정보 카드 (지면 교차점에서 최근접 단지 조회)
+  let aptGrid=null;
+  fetch(DATA+'/seoul/apts_index.json').then(r=>r.json()).then(list=>{
+    aptGrid={};
+    for(const a of list){
+      const k=Math.floor(a.x/60)+'_'+Math.floor(a.y/60);
+      (aptGrid[k]=aptGrid[k]||[]).push(a);
+    }
+  }).catch(()=>{});
+  let downXY=null;
+  renderer.domElement.addEventListener('pointerdown',e=>{downXY=[e.clientX,e.clientY];});
+  renderer.domElement.addEventListener('pointerup',e=>{
+    if(!downXY||Math.hypot(e.clientX-downXY[0],e.clientY-downXY[1])>6||!aptGrid)return;
+    const ndc=new THREE.Vector2(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1);
+    const ray=new THREE.Raycaster(); ray.setFromCamera(ndc,camera);
+    const hit=new THREE.Vector3();
+    if(!ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0,1,0),0),hit))return;
+    const dx=hit.x, dy=-hit.z;
+    let best=null,bd=90*90;
+    const gx=Math.floor(dx/60),gy=Math.floor(dy/60);
+    for(let ix=-2;ix<=2;ix++)for(let iy=-2;iy<=2;iy++){
+      for(const a of (aptGrid[(gx+ix)+'_'+(gy+iy)]||[])){
+        const d=(a.x-dx)**2+(a.y-dy)**2;
+        if(d<bd){bd=d;best=a;}
+      }
+    }
+    const card=document.getElementById('card');
+    if(!best){card.style.display='none';return;}
+    card.innerHTML=`<b style="color:#ffd88a">${best.n||'단지'}</b><br>`+
+      (best.p?`매매 평당 ${Number(best.p).toLocaleString()}만원<br>`:'')+
+      (best.jr>0?`전세 평당 ${Number(best.jr).toLocaleString()}만원<br>`:'')+
+      (best.r>0?`전세가율 <b style="color:${best.r>=70?'#ff5544':best.r>=55?'#ffd88a':'#7dffc4'}">${best.r}%</b>`:'');
+    card.style.display='block';
+    // 카드를 마우스 커서 옆에 (시즌1 방식) — 화면 밖으로 나가면 반대쪽으로
+    let lx=e.clientX+16, ly=e.clientY+12;
+    if(lx+card.offsetWidth>innerWidth-8)lx=e.clientX-card.offsetWidth-14;
+    if(ly+card.offsetHeight>innerHeight-8)ly=e.clientY-card.offsetHeight-14;
+    card.style.left=lx+'px'; card.style.top=ly+'px';
+  });
+
+  // 📸 4컷 자동 캡처 → 다운로드 (GPT 분석용)
+  const SHOTS=[
+    {n:'1_전경',   pos:[80,1200,2600], tgt:[0,60,-300], mode:1},
+    {n:'2_중거리', pos:[-350,190,1450], tgt:[248,110,146], mode:1},
+    {n:'3_야경',   pos:[-350,190,1450], tgt:[248,110,146], mode:2},
+    {n:'4_가격모드',pos:[80,1200,2600], tgt:[0,60,-300], mode:3},
+  ];
+  document.getElementById('capBtn').onclick=async()=>{
+    const btn=document.getElementById('capBtn');
+    btn.textContent='📸 캡처 중…';
+    const canvas=renderer.domElement;
+    for(const s of SHOTS){
+      setMode(s.mode);
+      camera.position.set(...s.pos);
+      controls.target.set(...s.tgt);
+      controls.update();
+      composer.render();
+      await new Promise(r=>setTimeout(r,300));
+      composer.render();
+      const url=canvas.toDataURL('image/png');
+      const a=document.createElement('a');
+      a.href=url; a.download=`nightscape_${s.n}.png`; a.click();
+      await new Promise(r=>setTimeout(r,600));
+    }
+    setMode(1);
+    btn.textContent='📸 4컷 캡처';
+  };
+
+  // 물: 하늘 반사 근사 셰이더 (프레넬 + 잔물결 스파클)
+  const waterMat=new THREE.ShaderMaterial({
+    uniforms:{uTime:{value:0},uSunDir:{value:skyMat.uniforms.sunDir.value},uMode:{value:0}},
+    vertexShader:`varying vec3 vW; varying vec3 vV;
+      void main(){vW=position; vec4 mv=modelViewMatrix*vec4(position,1.0); vV=-mv.xyz;
+      gl_Position=projectionMatrix*mv;}`,
+    fragmentShader:`
+      varying vec3 vW; varying vec3 vV; uniform float uTime; uniform vec3 uSunDir; uniform float uMode;
+      float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+      float vnoise(vec2 p){
+        vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);
+        float a=h(i),b=h(i+vec2(1,0)),c=h(i+vec2(0,1)),d=h(i+vec2(1,1));
+        return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);
+      }
+      void main(){
+        vec3 V=normalize(vV);
+        float fres=pow(1.0-abs(V.y),3.0);
+        // [ART_DIRECTION 2순위] 물: 흐름 노이즈 2옥타브로 반사 강도가 일렁이게
+        vec2 fp=vW.xz*0.012+vec2(uTime*0.03,uTime*0.012);
+        float flow=vnoise(fp)*0.55+vnoise(fp*3.7)*0.3+vnoise(fp*11.0)*0.15;   // 3옥타브 잔물결
+        vec3 deep=mix(vec3(0.005,0.009,0.017),vec3(0.013,0.016,0.024),flow); // 깊은 남색, 결 변조 강화
+        float wDay=1.0-smoothstep(0.0,1.0,uMode);
+        float wBlue=1.0-min(abs(uMode-1.0),1.0);
+        float wNightP=smoothstep(1.5,2.0,uMode);
+        deep=mix(deep,vec3(0.045,0.075,0.115),wDay);       // 낮: 강 기본색을 밝은 청으로 (검은 강 금지 — 지도 가독성)
+        vec3 skyRef=vec3(0.42,0.50,0.62)*wDay+vec3(0.20,0.24,0.36)*wBlue+vec3(0.08,0.10,0.18)*wNightP;   // 블루아워: 황혼 블루 미러 (전면 오렌지=흙탕물 금지)
+        fres=mix(fres,pow(1.0-abs(V.y),2.0),wBlue+wDay*0.5);   // 블루아워·낮: 강이 하늘 거울처럼 (원거리에서도 밝게)
+        float refMod=0.30+0.6*flow;                        // 물결 따라 반사가 결을 이루게
+        // 태양 물길 글리터
+        vec3 camW=normalize(vec3(-vV.x,0.0,-vV.z));
+        float sunPath=pow(max(dot(camW.xz,normalize(uSunDir.xz)),0.0),6.0);
+        vec2 gp=vW.xz*0.35+vec2(uTime*0.15,0.0);
+        float g=step(0.991,h(floor(gp)))*step(0.4,fract(gp.x*3.0));
+        vec3 glit=vec3(1.0)*wDay+vec3(1.0,0.7,0.4)*wBlue+vec3(0.85,0.75,0.55)*wNightP;
+        vec3 col=mix(deep,skyRef,fres*refMod);
+        col+=vec3(0.95,0.48,0.16)*sunPath*fres*refMod*wBlue*1.3;   // 석양 오렌지는 태양 물길에만
+        col+=glit*g*fres*sunPath*3.0*(1.0-step(2.5,uMode)*0.6);
+        gl_FragColor=vec4(col,1.0);
+      }`
+  });
+  window._waterMat=waterMat;
+  if(waterL)scene.add(new THREE.Mesh(mkGeo(waterL[0],waterL[1]),waterMat));
+
+  // 항공등
+  const bg=new THREE.SphereGeometry(2.4,8,6);
+  const bm=new THREE.MeshBasicMaterial({color:new THREE.Color(3,0.15,0.1)});
+  for(const [x,y,z] of meta.beacons){
+    const m=new THREE.Mesh(bg,bm); m.position.set(x,z,-y); scene.add(m);
+  }
+
+  // 지형
+  const T=await (await fetch(DATA+'/terrain_seoul.json')).json();
+  const {nx,ny}=T; const BASE_E=30.0;
+  const tg=new THREE.PlaneGeometry(1,1,nx-1,ny-1);
+  const p=tg.attributes.position;
+  for(let j=0;j<ny;j++)for(let i=0;i<nx;i++){
+    const idx=j*nx+i;
+    const x=T.x_left+(T.x_right-T.x_left)*i/(nx-1);
+    const y=T.y_top+(T.y_bot-T.y_top)*j/(ny-1);
+    const e=T.elev[j][i];
+    const z=e<=BASE_E?-0.5:(e-BASE_E);
+    p.setXYZ(idx,x,z,-y);
+  }
+  tg.computeVertexNormals();
+  // 산·대지: 경사 음영 + 반구광 + 노을 림 + 대기 페이드
+  const terrMat=new THREE.ShaderMaterial({
+    uniforms:{uMode:{value:0}},
+    vertexShader:`
+      varying vec3 vN; varying vec3 vP; varying float vDist;
+      void main(){vN=normal; vP=position;
+        vec4 mv=modelViewMatrix*vec4(position,1.0); vDist=length(mv.xyz);
+        gl_Position=projectionMatrix*mv;}`,
+    fragmentShader:`
+      varying vec3 vN; varying vec3 vP; varying float vDist; uniform float uMode;
+      float h2(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+      float vn2(vec2 p){
+        vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);
+        return mix(mix(h2(i),h2(i+vec2(1,0)),f.x),mix(h2(i+vec2(0,1)),h2(i+vec2(1,1)),f.x),f.y);
+      }
+      void main(){
+        vec3 n=normalize(vN);
+        float hemi=clamp(n.y*0.4+0.6,0.0,1.0);
+        float slope=clamp(1.0-n.y,0.0,1.0);
+        // 산 판정 = 고도×경사 결합: 평평한 구릉 시가지(강북 elev 60~90m)가 들판으로 칠해지던 버그 수정
+        float mount=smoothstep(8.0,42.0,vP.y)*smoothstep(0.04,0.15,slope);
+        mount=max(mount,smoothstep(70.0,150.0,vP.y));   // 진짜 고지대는 무조건 산림
+        float wDayT=1.0-smoothstep(0.0,1.0,uMode);
+        float wNightT=smoothstep(1.5,2.0,uMode);
+        float wBlueT=clamp(1.0-wDayT-wNightT,0.0,1.0);
+        // [5순위] 시가지 바닥: 필지/블록 패치 (단색 판때기 금지)
+        float lot=vn2(vP.xz*0.012)*0.6+vn2(vP.xz*0.05)*0.4;
+        // 시가지 바닥: 웜그레이 어반 톤 (청색=홍수 느낌 금지, 정전 금지 — 리버 지시)
+        vec3 cityG=mix(vec3(0.058,0.054,0.050),vec3(0.100,0.092,0.083),lot);
+        // 낮: 중성 콘크리트로 탈색 (황토 느낌 제거 — 리버 7/15 피드백)
+        cityG=mix(cityG,vec3(dot(cityG,vec3(0.333)))*vec3(0.99,1.0,1.03),wDayT*0.75);
+        // [저층 조직감] 골목 격자: ~38m 필지 경계선 (노이즈로 흔들어 자연스럽게)
+        vec2 gcell=vP.xz/38.0+vn2(vP.xz*0.006)*0.35;
+        vec2 gf=abs(fract(gcell)-0.5);
+        float alley=smoothstep(0.42,0.5,max(gf.x,gf.y));
+        float alleyK=0.8-0.55*(1.0-smoothstep(0.0,1.0,uMode));   // 낮엔 격자 약하게
+        cityG=mix(cityG,cityG*0.45,alley*alleyK);
+        // [7순위] 산: 2옥타브 질감(수풀 얼룩) + 경사 바위톤 — 짙고 포화된 산림 그린 (도시와 즉시 구분)
+        float forestTex=vn2(vP.xz*0.008)*0.55+vn2(vP.xz*0.03)*0.45;
+        vec3 forest=mix(vec3(0.016,0.034,0.013),vec3(0.028,0.052,0.019),forestTex);
+        vec3 rock=vec3(0.050,0.052,0.056);
+        // 능선 미세 굴곡: 2옥타브 릴리프로 산 표면이 살아나게
+        float relief=vn2(vP.xz*0.02)*0.5+vn2(vP.xz*0.07)*0.5;
+        vec3 mcol=mix(forest,rock,slope*1.1)*mix(0.72,1.3,relief);
+        vec3 col=mix(cityG,mcol,mount);
+        float rim=pow(max(dot(normalize(vec2(n.x,n.z)+vec2(1e-5)),vec2(1.0,0.0)),0.0),2.0);
+        // 환경광: 모드별 — 낮=중성 밝음, 블루아워=황혼 슬레이트(갈색 진흙 금지), 밤=차가운 달빛
+        vec3 ambBase=vec3(0.52,0.545,0.60)*wDayT+vec3(0.175,0.180,0.205)*wBlueT+vec3(0.11,0.125,0.17)*wNightT;
+        // 석양 림: 산 능선·서향 사면에 따뜻한 빛 (하늘과 지면 연결)
+        vec3 amb=mix(ambBase,vec3(1.0,0.62,0.38),rim*(0.45*wBlueT+0.10*wDayT)*max(mount,0.35))*hemi;
+        col*=amb*4.5;
+        col*=mix(1.0,1.35,wDayT);                             // 낮: 지형 밝게 (홍수 방지 위해 과승압 제거)
+        col=mix(col,col*vec3(0.55,0.62,0.80),wNightT*0.5);    // 밤: 차갑고 어둡게
+        col=mix(col,col*vec3(0.5,0.6,0.95),step(2.5,uMode)*0.7);
+        // [GPT 레퍼런스 핵심] 도시광 카펫: 블루아워 시가지 사이사이 따뜻한 빛이 고임 (정전 탈출)
+        float glowN=vn2(vP.xz*0.0035)*0.65+vn2(vP.xz*0.014)*0.35;
+        col+=vec3(1.0,0.60,0.28)*(1.0-mount)*smoothstep(0.40,0.85,glowN)*0.05*wBlueT;
+        vec3 fogCol=vec3(0.55,0.58,0.63)*wDayT+vec3(0.30,0.20,0.15)*wBlueT+vec3(0.015,0.022,0.045)*wNightT;
+        col=mix(col,fogCol,smoothstep(8000.0,24000.0,vDist)*0.17);   // 지면 헤이즈는 약하게 (진흙화 방지 — 색 정체성 유지)
+        gl_FragColor=vec4(col,1.0);
+      }`
+  });
+  window._terrMat=terrMat;
+  scene.add(new THREE.Mesh(tg,terrMat));
+
+  // 남산타워 (프로시저럴 랜드마크 — 서울임을 한눈에)
+  {
+    const NX=5678, NYD=2896;   // 데이터 좌표 (x, 북)
+    const gi=Math.round((NX-T.x_left)/(T.x_right-T.x_left)*(nx-1));
+    const gj=Math.round((NYD-T.y_top)/(T.y_bot-T.y_top)*(ny-1));
+    const elev=(T.elev[gj]&&T.elev[gj][gi])||240;
+    const base=Math.max(0,elev-30);
+    const twr=new THREE.Group();
+    const mShaft=new THREE.MeshBasicMaterial({color:0x23262e});
+    const mPod=new THREE.MeshBasicMaterial({color:0x15171d});
+    const mBand=new THREE.MeshBasicMaterial({color:new THREE.Color(1.7,1.15,0.6)});
+    const add=(geo,mat,y)=>{const m=new THREE.Mesh(geo,mat);m.position.y=y;twr.add(m);};
+    add(new THREE.CylinderGeometry(3.5,6.5,150,10),mShaft,75);
+    add(new THREE.CylinderGeometry(15,11,16,12),mPod,158);
+    add(new THREE.CylinderGeometry(15.4,15.4,3.5,12),mBand,161);
+    add(new THREE.CylinderGeometry(0.7,1.8,72,6),mShaft,202);
+    add(new THREE.SphereGeometry(2.2,8,6),new THREE.MeshBasicMaterial({color:new THREE.Color(3,0.15,0.1)}),239);
+    twr.position.set(NX,base,-NYD);
+    scene.add(twr);
+    console.log('[landmark] N서울타워 base',base.toFixed(0));
+  }
+
+  document.getElementById('load').style.display='none';
+}
+
+// ---------- 블룸 + 루프 ----------
+// MSAA 렌더타깃: 컴포저(블룸)를 쓰면 기본 안티앨리어싱이 꺼져 창문이 깜빡이는 것 방지 (저사양은 생략)
+// MSAA는 저사양에서도 유지 (반짝임이 성능보다 치명적 — 리버 판정), 보상은 해상도로
+const composer=new EffectComposer(renderer,new THREE.WebGLRenderTarget(innerWidth,innerHeight,{samples:2}));
+composer.addPass(new RenderPass(scene,camera));
+if(!NOBLOOM&&!LOWQ){
+  const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth>>1,innerHeight>>1),0.28,0.5,1.05);
+  composer.addPass(bloom);
+  window._bloom=bloom;
+}
+// [어우러짐] 통합 컬러 그레이드: 모든 레이어가 같은 공기·같은 필터를 통과하게 (저사양 생략)
+if(!LOWQ)import('three/addons/postprocessing/ShaderPass.js').then(({ShaderPass})=>{
+  const gradePass=new ShaderPass({
+    uniforms:{tDiffuse:{value:null},uMode:{value:1}},
+    vertexShader:`varying vec2 vUv; void main(){vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
+    fragmentShader:`
+      varying vec2 vUv; uniform sampler2D tDiffuse; uniform float uMode;
+      void main(){
+        vec3 c=texture2D(tDiffuse,vUv).rgb;
+        // 그림자를 한 가지 청색으로 통일 (부품들의 '검정'이 제각각인 것을 묶음)
+        float lum=dot(c,vec3(0.299,0.587,0.114));
+        vec3 shadowTint=mix(vec3(0.04,0.05,0.09),vec3(0.05,0.055,0.075),step(1.5,uMode));
+        float dayW=1.0-smoothstep(0.0,1.0,uMode);
+        shadowTint=mix(shadowTint,vec3(0.10,0.10,0.105),dayW);   // 낮: 중성 그림자
+        c=mix(shadowTint*0.5+c*0.92,c,smoothstep(0.0,0.35,lum));   // 그림자 청색 리프트 완화 (회청 캐스트 방지)
+        // 하이라이트는 살짝 웜 (도시광 온도 통일)
+        c=mix(c,c*vec3(1.05,1.0,0.92),smoothstep(0.5,1.0,lum)*0.5*(1.0-dayW*0.7));   // 낮: 웜 하이라이트 억제 (황토 방지)
+        // 채도 정돈 + 필름 S커브
+        vec3 g=vec3(dot(c,vec3(0.333)));
+        c=mix(g,c,0.92);
+        c=c*c*(3.0-2.0*c)*0.28+c*0.78;
+        // 비네트 (시선을 중앙으로)
+        float vig=1.0-smoothstep(0.55,1.25,length(vUv-0.5)*1.6);
+        c*=mix(0.82,1.0,vig);
+        gl_FragColor=vec4(c,1.0);
+      }`
+  });
+  composer.addPass(gradePass);
+  window._grade=gradePass;
+});
+window._composer=composer;
+
+addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight); composer.setSize(innerWidth,innerHeight);
+});
+
+let last=performance.now(),frames=0,accum=0;
+function frame(now){
+  controls.update();
+  // 물 애니메이션 고정 (리버 지시: 반짝이 제거, 고정 불빛만 — 연출 안정 후 재검토)
+  if(window._waterMat)window._waterMat.uniforms.uTime.value=100.0;
+  composer.render();
+  frames++; accum+=now-last; last=now;
+  if(accum>500){window._fps=frames*1000/accum;
+    document.getElementById('fps').textContent=window._fps.toFixed(0)+' fps';frames=0;accum=0;}
+}
+// 적응형 품질: 형 컴이 힘들어하면 자동 경량화 (rAF 구동 중일 때만 판단 — 백그라운드 탭 오탐 방지)
+window._quality=0;
+setInterval(()=>{
+  if(!rafOn||window._quality!==0||!window._fps)return;
+  if(window._fps<22){
+    window._quality=1;
+    if(window._bloom)window._bloom.enabled=false;
+    if(window._grade)window._grade.enabled=false;
+    renderer.setPixelRatio(0.85);
+    window._tileR=2200;
+    const el=document.getElementById('fps');
+    el.textContent+=' ⚡'; el.style.color='#ffd88a';
+    console.log('[quality] lite mode on');
+  }
+},5000);
+// rAF 기본 + 패널이 hidden 판정일 때는 타이머로 구동 (앱 내장 브라우저 대응)
+let rafOn=false;
+function tick(now){rafOn=true; requestAnimationFrame(tick); frame(now);}
+setInterval(()=>{if(!rafOn)frame(performance.now()); rafOn=false;},50);
+load().then(()=>{window.dispatchEvent(new Event('resize')); requestAnimationFrame(tick);})
+      .catch(e=>{console.error('[load-err]',e&&e.message,e&&e.stack);});
+</script>
+</body>
+</html>
