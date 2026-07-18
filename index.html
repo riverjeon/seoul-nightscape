@@ -84,7 +84,7 @@ const Q=new URLSearchParams(location.search);
 const LITE=Q.has('lite'), NOBLOOM=Q.has('nobloom');
 // 데이터 호스트 분리 배포용 (Vercel=html, GitHub Pages=대용량 bin): window.DATA_ROOT 주입 or ?data=
 const DATA=(Q.get('data')||window.DATA_ROOT||'data').replace(/\/+$/,'');
-const DV='?v=20260718c';   // 데이터 버전 태그: meta/bin 캐시 불일치(레이어 전멸 버그) 방지
+const DV='?v=20260718d';   // 데이터 버전 태그: meta/bin 캐시 불일치(레이어 전멸 버그) 방지
 // 저사양 자동 감지: 코어 적거나 ?q=low → 처음부터 경량 (블룸·그레이드·MSAA 없이)
 const LOWQ=Q.get('q')==='low'||(navigator.hardwareConcurrency||8)<=4||(navigator.deviceMemory||8)<=4;
 if(LOWQ)console.log('[quality] low-spec start');
@@ -412,11 +412,12 @@ function roadMaterial(){
       void main(){
         float wDay=1.0-smoothstep(0.0,1.0,uMode);
         float nearF=1.0-smoothstep(450.0,2200.0,vDist);
-        // 근접: 아스팔트 결 + ~18m 주기 가로등 빛 웅덩이
-        float pool=smoothstep(0.35,0.9,vn(vW.xz*0.055));
+        // 근접 질감: 낮=아스팔트, 밤=불 켜진 노면 — [시즌1 문법] 도로는 어느 줌에서든 밝은 혈관 유지
+        float pool=smoothstep(0.30,0.9,vn(vW.xz*0.055));
         float grain=vn(vW.xz*0.5)*0.25+0.875;
-        vec3 asph=mix(vec3(0.020,0.020,0.024),vec3(0.115,0.115,0.125),wDay)*grain;
-        vec3 nearC=asph+uColor*pool*(1.0-wDay*0.85)*0.9;
+        vec3 asphD=vec3(0.115,0.115,0.125)*grain;                 // 낮: 밝은 지면 위 어두운 선
+        vec3 litN=uColor*(0.55+0.60*pool)*grain;                  // 밤: 나트륨등 노면 (사라지지 않음)
+        vec3 nearC=mix(litN,asphD,wDay);
         vec3 col=mix(uColor,nearC,nearF);
         // 원거리 대기 (기본재질 scene.fog 대체 — 헤이즈 팔레트 통일)
         float wNP=min(smoothstep(1.5,2.0,uMode)+step(2.5,uMode),1.0);
@@ -602,8 +603,8 @@ async function load(){
   // [리버 지시] 초기버전의 레이어 구분감 복원: 도로는 어느 모드에서든 도시 혈관으로 읽혀야 함
   const ST_COLORS=[
     [[0.115,0.115,0.13],[0.085,0.085,0.095],[0.065,0.065,0.075]],     // 낮: 어두운 아스팔트 (밝은 지면 위 도로망이 지도처럼 읽힘)
-    [[0.85,0.45,0.12],[0.42,0.24,0.09],[0.20,0.13,0.06]],             // 블루아워: 골드오렌지 채도 상향 (크림빛 탈색 방지)
-    [[0.85,0.55,0.26],[0.44,0.30,0.15],[0.20,0.145,0.08]],            // 야경: 앰버 풀
+    [[0.85,0.45,0.12],[0.42,0.24,0.09],[0.24,0.155,0.075]],           // 블루아워: 골드오렌지, 이면도로 커버리지 상향
+    [[0.85,0.55,0.26],[0.44,0.30,0.15],[0.24,0.170,0.090]],           // 야경: 앰버 풀
     [[0.42,0.47,0.63],[0.27,0.31,0.43],[0.16,0.19,0.27]],             // 가격: 은청 선명
     [[0.42,0.47,0.63],[0.27,0.31,0.43],[0.16,0.19,0.27]],             // 전세: 은청 선명
   ];
@@ -889,7 +890,8 @@ async function load(){
         vec2 gcell=vP.xz/38.0+vn2(vP.xz*0.006)*0.35;
         vec2 gf=abs(fract(gcell)-0.5);
         float alley=smoothstep(0.42,0.5,max(gf.x,gf.y));
-        float alleyK=0.8-0.55*(1.0-smoothstep(0.0,1.0,uMode));   // 낮엔 격자 약하게
+        // 골목 격자는 근접에서만 (중간 줌에서 '욕실 타일' 되던 것 — 리버 지적)
+        float alleyK=(0.8-0.55*(1.0-smoothstep(0.0,1.0,uMode)))*(1.0-smoothstep(550.0,1700.0,vDist));
         cityG=mix(cityG,cityG*0.45,alley*alleyK);
         // [7순위] 산: 2옥타브 질감(수풀 얼룩) + 경사 바위톤 — 짙고 포화된 산림 그린 (도시와 즉시 구분)
         float forestTex=vn2(vP.xz*0.008)*0.55+vn2(vP.xz*0.03)*0.45;
@@ -901,7 +903,8 @@ async function load(){
         vec3 col=mix(cityG,mcol,mount);
         float rim=pow(max(dot(normalize(vec2(n.x,n.z)+vec2(1e-5)),vec2(1.0,0.0)),0.0),2.0);
         // 환경광: 모드별 — 낮=중성 밝음, 블루아워=황혼 슬레이트(갈색 진흙 금지), 밤=차가운 달빛
-        vec3 ambBase=vec3(0.52,0.545,0.60)*wDayT+vec3(0.175,0.180,0.205)*wBlueT+vec3(0.11,0.125,0.17)*wNightT;
+        // [시즌1 문법] 바닥은 어느 거리·어느 사양에서든 가장 어두운 층 (그레이드 미적용 저사양 포함)
+        vec3 ambBase=vec3(0.52,0.545,0.60)*wDayT+vec3(0.142,0.148,0.172)*wBlueT+vec3(0.095,0.108,0.150)*wNightT;
         // 석양 림: 산 능선·서향 사면에 따뜻한 빛 (하늘과 지면 연결)
         vec3 amb=mix(ambBase,vec3(1.0,0.62,0.38),rim*(0.45*wBlueT+0.10*wDayT)*max(mount,0.35))*hemi;
         col*=amb*4.5;
@@ -1054,4 +1057,5 @@ load().then(()=>{window.dispatchEvent(new Event('resize')); requestAnimationFram
 </script>
 </body>
 </html>
+
 
