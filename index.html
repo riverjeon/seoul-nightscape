@@ -364,6 +364,15 @@ function buildingMaterial(p){
           }
           else base=vec3(dot(base,vec3(0.33)))*vec3(0.7,0.78,0.95)*0.8;
         }
+        // [근접 페사드 입체] 창문 리세스: 인방 그림자 + 창턱 하이라이트 + 멀리언 리듬 (가까울 때만)
+        float nearW=(1.0-smoothstep(220.0,850.0,vDist))*wall
+                    *(wDay+wBlue*0.45+(wNight+wPrice)*0.25);
+        if(nearW>0.001){
+          float relZ=clamp((fr.z-uZB.x)/max(uZB.y-uZB.x,1e-3),0.0,1.0);
+          s*=1.0-smoothstep(0.70,1.0,relZ)*0.48*nearW;            // 상단 인방 그림자 (파인 느낌)
+          s*=1.0+(1.0-smoothstep(0.0,0.22,relZ))*0.16*nearW;      // 하단 창턱 반사광
+          base*=1.0-(1.0-max(bx,by))*bz*0.10*nearW;               // 창 사이 멀리언 음영 (기둥 리듬)
+        }
         vec3 col=mix(base,winCol*s,win);
         // 원거리 대기 페이드: 하늘 지평선과 연결된 웜 헤이즈 (모든 레이어 공통 색 — 회색 수렴 금지)
         vec3 fogCol=vec3(0.55,0.58,0.63)*wDay+vec3(0.30,0.20,0.15)*wBlue+vec3(0.015,0.022,0.045)*(wNight+wPrice);
@@ -793,6 +802,9 @@ async function load(){
         vec3 cityG=mix(vec3(0.058,0.054,0.050),vec3(0.100,0.092,0.083),lot);
         // 낮: 중성 콘크리트로 탈색 (황토 느낌 제거 — 리버 7/15 피드백)
         cityG=mix(cityG,vec3(dot(cityG,vec3(0.333)))*vec3(0.99,1.0,1.03),wDayT*0.75);
+        // 낮: 주거 블록 필지 채색 — ~90m 블록 단위 미세 웜/쿨 편차 (균일 회색 탈피, 채도는 중성 유지)
+        vec3 blockTint=mix(vec3(0.955,0.985,1.045),vec3(1.055,1.005,0.945),h2(floor(vP.xz/90.0)));
+        cityG*=mix(vec3(1.0),blockTint,wDayT);
         // [저층 조직감] 골목 격자: ~38m 필지 경계선 (노이즈로 흔들어 자연스럽게)
         vec2 gcell=vP.xz/38.0+vn2(vP.xz*0.006)*0.35;
         vec2 gf=abs(fract(gcell)-0.5);
@@ -847,6 +859,34 @@ async function load(){
     twr.position.set(NX,base,-NYD);
     scene.add(twr);
     console.log('[landmark] N서울타워 base',base.toFixed(0));
+  }
+
+  // 롯데월드타워 (프로시저럴 — 잠실 555m, GIS 데이터에 부재)
+  {
+    const LX=15758, LYD=-1382;   // 데이터 좌표 (x, 북) = 127.1025E, 37.5125N
+    const gi=Math.max(0,Math.min(nx-1,Math.round((LX-T.x_left)/(T.x_right-T.x_left)*(nx-1))));
+    const gj=Math.max(0,Math.min(ny-1,Math.round((LYD-T.y_top)/(T.y_bot-T.y_top)*(ny-1))));
+    const elev=(T.elev[gj]&&T.elev[gj][gi])||30;
+    const base=Math.max(0,elev-30);
+    const twr=new THREE.Group();
+    // 완만히 좁아지는 곡면 셰이프 (라떼 프로파일)
+    const prof=[[36,0],[34,90],[30,220],[25,360],[19,470],[12,530],[8,548],[6.5,555]]
+      .map(([r,y])=>new THREE.Vector2(r,y));
+    twr.add(new THREE.Mesh(new THREE.LatheGeometry(prof,18),
+      new THREE.MeshBasicMaterial({color:0x1a2030})));
+    const band=(y,r,h,c)=>{
+      const m=new THREE.Mesh(new THREE.CylinderGeometry(r,r,h,18),
+        new THREE.MeshBasicMaterial({color:c}));
+      m.position.y=y; twr.add(m);
+    };
+    band(478,21.5,4.5,new THREE.Color(1.6,1.10,0.55));  // 서울스카이 전망대
+    band(551,7.2,3.0,new THREE.Color(1.4,1.05,0.60));   // 크라운 라이트
+    const bcn=new THREE.Mesh(new THREE.SphereGeometry(2.4,8,6),
+      new THREE.MeshBasicMaterial({color:new THREE.Color(3,0.15,0.1)}));
+    bcn.position.y=558; twr.add(bcn);
+    twr.position.set(LX,base,1382);   // three z=-데이터y
+    scene.add(twr);
+    console.log('[landmark] 롯데월드타워 base',base.toFixed(0));
   }
 
   document.getElementById('load').style.display='none';
