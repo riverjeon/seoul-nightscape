@@ -50,6 +50,18 @@
 </div>
 
 
+<div id="labels" style="position:fixed;inset:0;pointer-events:none;z-index:3;overflow:hidden"></div>
+<div id="mctl" style="position:fixed;right:10px;top:50%;transform:translateY(-50%);z-index:6;
+  display:none;flex-direction:column;align-items:center;gap:10px">
+  <button id="mzin" class="mcbtn">➕</button>
+  <button id="mzout" class="mcbtn">➖</button>
+  <div style="height:130px;width:40px;display:flex;align-items:center;justify-content:center">
+    <input id="mtilt" type="range" min="10" max="80" value="35"
+      style="width:120px;transform:rotate(-90deg);touch-action:none">
+  </div>
+</div>
+<style>.mcbtn{width:46px;height:46px;border-radius:12px;background:#131826cc;color:#ffd88a;
+  border:1px solid #ffd88a55;font-size:20px;touch-action:none}</style>
 <div id="fps"></div>
 <div id="load">서울을 짓는 중…</div>
 
@@ -639,6 +651,73 @@ async function load(){
     controls.update();
   });
 
+  // 동네 지명 라벨 (시즌1 이식 — HTML 오버레이 투영)
+  {
+    const LBL_SRC=[
+      ['광화문',126.977,37.572],['동대문',127.009,37.571],['용산',126.965,37.530],
+      ['한남',127.005,37.534],['압구정',127.028,37.527],['청담',127.048,37.522],
+      ['강남',127.028,37.498],['대치',127.062,37.494],['반포',126.995,37.505],
+      ['서초',127.008,37.491],['잠실',127.100,37.513],['천호',127.124,37.545],
+      ['건대',127.071,37.541],['성수',127.056,37.542],['왕십리',127.037,37.561],
+      ['여의도',126.924,37.521],['마포',126.951,37.544],['홍대',126.923,37.556],
+      ['상암',126.890,37.577],['목동',126.875,37.530],['구로',126.887,37.495],
+      ['관악',126.951,37.478],['노원',127.061,37.654],['마곡',126.835,37.560],
+      ['이촌',126.972,37.518],
+    ];
+    const MXl=111320*Math.cos(37.525*Math.PI/180), MYl=110540;
+    const box=document.getElementById('labels');
+    const LBL=LBL_SRC.map(([n,lng,lat])=>{
+      const el=document.createElement('div');
+      el.textContent=n;
+      el.style.cssText='position:absolute;transform:translate(-50%,-50%);display:none;'+
+        'color:rgba(225,238,255,.92);font:700 14px "Segoe UI";letter-spacing:3px;'+
+        'text-shadow:0 0 10px #000,0 0 4px #000,0 2px 3px #000;white-space:nowrap;';
+      box.appendChild(el);
+      return {el,x:(lng-126.924)*MXl,z:-((lat-37.525)*MYl)};
+    });
+    const _lv=new THREE.Vector3();
+    window._updLabels=()=>{
+      for(const L of LBL){
+        _lv.set(L.x,60,L.z).applyMatrix4(camera.matrixWorldInverse);
+        const vz=-_lv.z;                                    // 카메라 앞 거리
+        if(vz<1300||vz>17000){L.el.style.display='none';continue;}
+        _lv.set(L.x,60,L.z).project(camera);
+        if(Math.abs(_lv.x)>1.04||Math.abs(_lv.y)>1.04){L.el.style.display='none';continue;}
+        L.el.style.display='block';
+        L.el.style.left=((_lv.x*0.5+0.5)*innerWidth)+'px';
+        L.el.style.top=((-_lv.y*0.5+0.5)*innerHeight)+'px';
+        L.el.style.opacity=(Math.min(1,(vz-1300)/900)*Math.min(1,(17000-vz)/3000)*0.92).toFixed(2);
+      }
+    };
+  }
+
+  // 모바일 조작 보조 (리버 지시: 우측 줌 버튼 + 틸트 슬라이더 — 시즌1 방식)
+  if(('ontouchstart' in window)||navigator.maxTouchPoints>0){
+    const ctl=document.getElementById('mctl'); ctl.style.display='flex';
+    const hold=(id,fn)=>{
+      const b=document.getElementById(id); let t=null;
+      b.addEventListener('pointerdown',e=>{e.preventDefault();fn();t=setInterval(fn,70);});
+      const stop=()=>{if(t){clearInterval(t);t=null;}};
+      b.addEventListener('pointerup',stop); b.addEventListener('pointerleave',stop);
+      addEventListener('pointercancel',stop);
+    };
+    hold('mzin',()=>{
+      if(camera.position.distanceTo(controls.target)>40)
+        camera.position.lerp(controls.target,0.06); controls.update();
+    });
+    hold('mzout',()=>{
+      camera.position.sub(controls.target).multiplyScalar(1.065).add(controls.target);
+      controls.update();
+    });
+    document.getElementById('mtilt').oninput=e=>{
+      const t=controls.target, o=camera.position.clone().sub(t), r=o.length();
+      const az=Math.atan2(o.x,o.z);
+      const p=(90-(+e.target.value))*Math.PI/180;          // 슬라이더 위 = 부감
+      o.set(r*Math.sin(p)*Math.sin(az), r*Math.cos(p), r*Math.sin(p)*Math.cos(az));
+      camera.position.copy(t).add(o); controls.update();
+    };
+  }
+
   // 클릭 → 단지 정보 카드 (지면 교차점에서 최근접 단지 조회)
   let aptGrid=null;
   fetch(DATA+'/seoul/apts_index.json').then(r=>r.json()).then(list=>{
@@ -944,6 +1023,7 @@ function frame(now){
   controls.update();
   // 물 애니메이션 고정 (리버 지시: 반짝이 제거, 고정 불빛만 — 연출 안정 후 재검토)
   if(window._waterMat)window._waterMat.uniforms.uTime.value=100.0;
+  if(window._updLabels&&frames%2===0)window._updLabels();   // 동네 지명 (한 프레임 걸러)
   composer.render();
   frames++; accum+=now-last; last=now;
   if(accum>500){window._fps=frames*1000/accum;
