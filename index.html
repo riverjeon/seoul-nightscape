@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="utf-8">
@@ -84,6 +84,7 @@ const Q=new URLSearchParams(location.search);
 const LITE=Q.has('lite'), NOBLOOM=Q.has('nobloom');
 // 데이터 호스트 분리 배포용 (Vercel=html, GitHub Pages=대용량 bin): window.DATA_ROOT 주입 or ?data=
 const DATA=(Q.get('data')||window.DATA_ROOT||'data').replace(/\/+$/,'');
+const DV='?v=20260718c';   // 데이터 버전 태그: meta/bin 캐시 불일치(레이어 전멸 버그) 방지
 // 저사양 자동 감지: 코어 적거나 ?q=low → 처음부터 경량 (블룸·그레이드·MSAA 없이)
 const LOWQ=Q.get('q')==='low'||(navigator.hardwareConcurrency||8)<=4||(navigator.deviceMemory||8)<=4;
 if(LOWQ)console.log('[quality] low-spec start');
@@ -429,8 +430,8 @@ function roadMaterial(){
 
 // ---------- 데이터 로드 ----------
 async function load(){
-  const meta=await (await fetch(DATA+'/seoul/seoul_meta.json')).json();
-  const buf=await (await fetch(DATA+'/seoul/resident.bin')).arrayBuffer();
+  const meta=await (await fetch(DATA+'/seoul/seoul_meta.json'+DV)).json();
+  const buf=await (await fetch(DATA+'/seoul/resident.bin'+DV)).arrayBuffer();
   const mkGeo=(bf,L)=>{
     // (x, y북, z높이) → three (x, z높이, -y). q 있으면 uint16 정규화 복원
     const pos=new Float32Array(L.vn*3);
@@ -472,7 +473,7 @@ async function load(){
   const typeMat={};
   for(const t of Object.keys(TYPE_PARAMS))typeMat[t]=buildingMaterial(TYPE_PARAMS[t]);
   // 연도별 가격 텍스처 로드 → 전 건물 머티리얼에 주입
-  fetch(DATA+'/seoul/price_years.bin').then(r=>r.arrayBuffer()).then(b=>{
+  fetch(DATA+'/seoul/price_years.bin'+DV).then(r=>r.arrayBuffer()).then(b=>{
     const t=new THREE.DataTexture(new Uint8Array(b),meta.py_w,meta.py_h,THREE.RedFormat,THREE.UnsignedByteType);
     t.minFilter=t.magFilter=THREE.NearestFilter; t.needsUpdate=true;
     for(const k in typeMat){
@@ -556,7 +557,7 @@ async function load(){
     tileState[key]={status:'loading',meshes:[]};
     const T=meta.tiles[key];
     let tb;
-    try{tb=await (await fetch(DATA+'/seoul/'+T.file)).arrayBuffer();}
+    try{tb=await (await fetch(DATA+'/seoul/'+T.file+DV)).arrayBuffer();}
     catch(e){delete tileState[key]; return;}
     if(!tileState[key])return;
     const meshes=[];
@@ -720,7 +721,7 @@ async function load(){
 
   // 클릭 → 단지 정보 카드 (지면 교차점에서 최근접 단지 조회)
   let aptGrid=null;
-  fetch(DATA+'/seoul/apts_index.json').then(r=>r.json()).then(list=>{
+  fetch(DATA+'/seoul/apts_index.json'+DV).then(r=>r.json()).then(list=>{
     aptGrid={};
     for(const a of list){
       const k=Math.floor(a.x/60)+'_'+Math.floor(a.y/60);
@@ -837,7 +838,7 @@ async function load(){
   }
 
   // 지형
-  const T=await (await fetch(DATA+'/terrain_seoul.json')).json();
+  const T=await (await fetch(DATA+'/terrain_seoul.json'+DV)).json();
   const {nx,ny}=T; const BASE_E=30.0;
   const tg=new THREE.PlaneGeometry(1,1,nx-1,ny-1);
   const p=tg.attributes.position;
@@ -1053,3 +1054,4 @@ load().then(()=>{window.dispatchEvent(new Event('resize')); requestAnimationFram
 </script>
 </body>
 </html>
+
