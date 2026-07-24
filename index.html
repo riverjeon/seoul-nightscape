@@ -734,7 +734,8 @@ async function load(){
           new THREE.MeshBasicMaterial({color:new THREE.Color(2.2,1.5,0.5)}));
         bc.position.set(v.x,338,-v.y); grp.add(bc);
         const el=document.createElement('div');
-        el.innerHTML='👑 <b>'+v.r+'</b><br>'+v.n+' · '+fmtP(v.p);
+        const tot=(v.p*34/10000).toFixed(1).replace(/\.0$/,'');   // 국평 84㎡(34평) 환산 총액
+        el.innerHTML='👑 <b>'+v.r+'</b><br>'+v.n+'<br>'+fmtP(v.p)+' · <b style="color:#ffe9b8">84㎡ 약 '+tot+'억</b>';
         el.style.cssText='position:absolute;transform:translate(-50%,-130%);display:none;text-align:center;'+
           'color:#ffd88a;font:700 12px "Segoe UI";line-height:1.5;letter-spacing:0.5px;'+
           'text-shadow:0 0 10px #000,0 0 4px #000,0 2px 3px #000;white-space:nowrap;pointer-events:none;';
