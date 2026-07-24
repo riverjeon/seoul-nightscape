@@ -90,7 +90,7 @@ const Q=new URLSearchParams(location.search);
 const LITE=Q.has('lite'), NOBLOOM=Q.has('nobloom');
 // 데이터 호스트 분리 배포용 (Vercel=html, GitHub Pages=대용량 bin): window.DATA_ROOT 주입 or ?data=
 const DATA=(Q.get('data')||window.DATA_ROOT||'data').replace(/\/+$/,'');
-const DV='?v=20260724songdo';   // 데이터 버전 태그: meta/bin 캐시 불일치(레이어 전멸 버그) 방지 — 경기 1차 링 확장판
+const DV='?v=20260724fix2';   // 데이터 버전 태그: meta/bin 캐시 불일치(레이어 전멸 버그) 방지 — 경기 1차 링 확장판
 // 저사양 자동 감지: 코어 적거나 ?q=low → 처음부터 경량 (블룸·그레이드·MSAA 없이)
 // + 인텔 내장그래픽(Iris/UHD)도 저사양 취급 — 수도권 74만 채엔 디스크리트 GPU 아니면 버거움
 let IGPU=false;
