@@ -25,6 +25,7 @@
   <button class="mbtn" data-m="2">🌃 야경</button>
   <button class="mbtn" data-m="3">💰 가격</button>
   <button class="mbtn" data-m="4">🔑 전세</button>
+  <button class="mbtn" id="crownbtn" title="구·시별 평당가 1위 (실거래 검증)">👑 대장</button>
   <button class="mbtn" id="qbtn" title="느릴 때: 해상도·효과를 낮춰 속도 우선">⚡ 가볍게</button>
 </div>
 <div id="spotBar" style="position:fixed;right:14px;top:12px;z-index:5;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:340px">
@@ -712,6 +713,61 @@ async function load(){
         L.el.style.top=((-_lv.y*0.5+0.5)*innerHeight)+'px';
         L.el.style.opacity=(Math.min(1,(vz-1300)/900)*Math.min(1,(17000-vz)/3000)*0.92).toFixed(2);
       }
+    };
+  }
+
+  // 👑 대장 아파트 모드 — 구·시별 평당가 1위 (leaders.json, 실거래 팩트체크 통과분)
+  {
+    const cb=document.getElementById('crownbtn');
+    const box=document.getElementById('labels');
+    let on=false, grp=null, clbs=[], LD=null;
+    const fmtP=p=>p>=10000?(p/10000).toFixed(1).replace(/\.0$/,'')+'억/평':Math.round(p).toLocaleString()+'만/평';
+    async function build(){
+      if(!LD) LD=await (await fetch(DATA+'/seoul/leaders.json'+DV)).json();
+      grp=new THREE.Group();
+      const pm=new THREE.MeshBasicMaterial({color:new THREE.Color(1.5,1.05,0.35),
+        transparent:true,opacity:0.34,blending:THREE.AdditiveBlending,depthWrite:false});
+      for(const v of LD.sale){
+        const pil=new THREE.Mesh(new THREE.CylinderGeometry(6,9,330,8),pm);
+        pil.position.set(v.x,165,-v.y); grp.add(pil);
+        const bc=new THREE.Mesh(new THREE.SphereGeometry(4,8,6),
+          new THREE.MeshBasicMaterial({color:new THREE.Color(2.2,1.5,0.5)}));
+        bc.position.set(v.x,338,-v.y); grp.add(bc);
+        const el=document.createElement('div');
+        el.innerHTML='👑 <b>'+v.r+'</b><br>'+v.n+' · '+fmtP(v.p);
+        el.style.cssText='position:absolute;transform:translate(-50%,-130%);display:none;text-align:center;'+
+          'color:#ffd88a;font:700 12px "Segoe UI";line-height:1.5;letter-spacing:0.5px;'+
+          'text-shadow:0 0 10px #000,0 0 4px #000,0 2px 3px #000;white-space:nowrap;pointer-events:none;';
+        box.appendChild(el);
+        clbs.push({el,x:v.x,z:-v.y});
+      }
+      scene.add(grp);
+    }
+    const _pv=new THREE.Vector3();
+    const prevUpd=window._updLabels;
+    window._updLabels=()=>{
+      if(prevUpd)prevUpd();
+      if(!on){for(const L of clbs)L.el.style.display='none';return;}
+      for(const L of clbs){
+        _pv.set(L.x,345,L.z).applyMatrix4(camera.matrixWorldInverse);
+        const vz=-_pv.z;
+        if(vz<700||vz>30000){L.el.style.display='none';continue;}
+        _pv.set(L.x,345,L.z).project(camera);
+        if(Math.abs(_pv.x)>1.05||Math.abs(_pv.y)>1.05){L.el.style.display='none';continue;}
+        L.el.style.display='block';
+        L.el.style.left=((_pv.x*0.5+0.5)*innerWidth)+'px';
+        L.el.style.top=((-_pv.y*0.5+0.5)*innerHeight)+'px';
+      }
+    };
+    cb.onclick=async()=>{
+      on=!on;
+      cb.classList.toggle('on',on);
+      if(on){
+        if(!grp)await build();
+        grp.visible=true;
+        document.querySelector('.mbtn[data-m="3"]').click();   // 가격 모드로 컨텍스트 전환
+        cb.classList.add('on');                                 // 모드 클릭이 하이라이트 지워도 유지
+      }else if(grp)grp.visible=false;
     };
   }
 
