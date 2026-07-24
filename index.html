@@ -35,7 +35,7 @@
   <button class="sbtn" data-s="판교">판교</button><button class="sbtn" data-s="분당">분당</button>
   <button class="sbtn" data-s="평촌">평촌</button><button class="sbtn" data-s="과천">과천</button>
   <button class="sbtn" data-s="광명">광명</button><button class="sbtn" data-s="부천">부천</button>
-  <button class="sbtn" data-s="하남">하남</button>
+  <button class="sbtn" data-s="하남">하남</button><button class="sbtn" data-s="송도">송도</button>
 </div>
 <div id="card" style="position:fixed;left:0;top:0;z-index:6;display:none;min-width:200px;
   background:#131826ee;border:1px solid #ffd88a55;border-radius:10px;padding:10px 14px;
@@ -662,7 +662,7 @@ async function load(){
   const SPOTS={'시청':[4762,-4565],'여의도':[248,146],'강남':[9150,2989],'잠실':[15540,1293],'남산':[5678,-2896],
     // 경기 1차 링
     '판교':[14567,14370],'분당':[16245,17465],'평촌':[3531,14481],'광명':[-6092,5085],
-    '부천':[-12448,4532],'하남':[25603,-1548],'과천':[5650,10612]};
+    '부천':[-12448,4532],'하남':[25603,-1548],'과천':[5650,10612],'송도':[-24982,14812]};
   document.querySelectorAll('.sbtn').forEach(b=>b.onclick=()=>{
     const [x,z]=SPOTS[b.dataset.s];
     controls.target.set(x,60,z);
@@ -688,6 +688,7 @@ async function load(){
       ['광명',126.855,37.479],['철산',126.868,37.476],['광명역',126.883,37.416],
       ['부천',126.783,37.484],['중동',126.763,37.503],['하남',127.214,37.539],
       ['미사',127.193,37.563],['과천',126.988,37.429],
+      ['송도',126.641,37.391],['연수',126.678,37.410],
     ];
     const MXl=111320*Math.cos(37.525*Math.PI/180), MYl=110540;
     const box=document.getElementById('labels');
